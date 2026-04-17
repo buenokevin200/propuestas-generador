@@ -1,11 +1,52 @@
-import { useState } from 'react';
-import { Upload, FileText } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { Upload, FileText, Loader2 } from 'lucide-react';
 import DocumentViewer from './components/DocumentViewer';
 import ChatPanel from './components/ChatPanel';
+
+export type Placeholder = {
+  id: string;
+  raw: string;
+  constraints: Record<string, string>;
+};
 
 export default function App() {
   const [documentLoaded, setDocumentLoaded] = useState(false);
   const [activePlaceholder, setActivePlaceholder] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [documentId, setDocumentId] = useState<string | null>(null);
+  const [placeholders, setPlaceholders] = useState<Placeholder[]>([]);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch('/api/v1/documents/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Upload failed");
+      }
+
+      const data = await response.json();
+      setDocumentId(data.document_id);
+      setPlaceholders(data.placeholders || []);
+      setDocumentLoaded(true);
+    } catch (error) {
+      alert("Uh oh! Failed to upload document. Is the backend running?");
+      console.error(error);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
@@ -38,17 +79,32 @@ export default function App() {
               </div>
               <h2 className="text-xl font-semibold mb-2">Upload Template</h2>
               <p className="text-slate-500 mb-6 text-sm">
-                Upload your .docx or .pptx document containing placeholders like &lt;&lt;company_name&gt;&gt;
+                Carga tu archivo .docx que contiene marcadores como &lt;&lt;nombre_empresa&gt;&gt;
               </p>
+              
+              <input 
+                type="file" 
+                accept=".docx,.pptx"
+                className="hidden"
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+              />
+              
               <button 
-                onClick={() => setDocumentLoaded(true)}
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
               >
-                Simulate Upload
+                {uploading ? (
+                  <><Loader2 size={18} className="animate-spin" /> Cargando...</>
+                ) : (
+                  'Seleccionar Archivo'
+                )}
               </button>
             </div>
           ) : (
             <DocumentViewer 
+              placeholders={placeholders}
               activePlaceholder={activePlaceholder} 
               onSelect={setActivePlaceholder} 
             />
@@ -57,8 +113,9 @@ export default function App() {
       </div>
 
       {/* Chat / AI Panel */}
-      {documentLoaded && (
+      {documentLoaded && documentId && (
         <ChatPanel 
+          documentId={documentId}
           activePlaceholder={activePlaceholder} 
         />
       )}

@@ -3,14 +3,19 @@ import { useState } from 'react';
 
 type Message = { id: string; role: 'user' | 'assistant'; content: string };
 
-export default function ChatPanel({ activePlaceholder }: { activePlaceholder: string | null }) {
+interface ChatPanelProps {
+  documentId: string;
+  activePlaceholder: string | null;
+}
+
+export default function ChatPanel({ documentId, activePlaceholder }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [loading, setLoading] = useState(false);
 
   const activeMessages = activePlaceholder ? (messages[activePlaceholder] || []) : [];
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim() || !activePlaceholder) return;
     
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: input };
@@ -21,28 +26,54 @@ export default function ChatPanel({ activePlaceholder }: { activePlaceholder: st
     setInput('');
     setLoading(true);
 
-    // Simulate AI response
-    setTimeout(() => {
+    try {
+      const response = await fetch(`/api/v1/documents/${documentId}/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          placeholder_id: activePlaceholder,
+          user_message: userMsg.content,
+          chat_history: activeMessages.map(m => ({ role: m.role, content: m.content }))
+        })
+      });
+
+      if (!response.ok) throw new Error("Fallo la petición a IA");
+      const data = await response.json();
+      
       const aiMsg: Message = { 
         id: (Date.now() + 1).toString(), 
         role: 'assistant', 
-        content: `Here is the generated content for <<${activePlaceholder}>> based on your request.` 
+        content: data.generated_content 
       };
+      
       setMessages(prev => ({
         ...prev,
         [activePlaceholder]: [...(prev[activePlaceholder] || []), aiMsg]
       }));
+    } catch (err) {
+      console.error(err);
+      // Fallback in case of error
+      const errorMsg: Message = { 
+        id: (Date.now() + 1).toString(), 
+        role: 'assistant', 
+        content: "Ocurrió un error consultando a la IA. Revisa la consola o asegúrate de que tengas conexión."
+      };
+      setMessages(prev => ({
+        ...prev,
+        [activePlaceholder]: [...(prev[activePlaceholder] || []), errorMsg]
+      }));
+    } finally {
       setLoading(false);
-    }, 1500);
+    }
   };
 
   if (!activePlaceholder) {
     return (
       <div className="w-[400px] border-l bg-white flex flex-col items-center justify-center p-8 text-center shrink-0">
         <Sparkles className="w-12 h-12 text-slate-300 mb-4" />
-        <h3 className="text-lg font-medium text-slate-700 mb-2">AI Assistant</h3>
+        <h3 className="text-lg font-medium text-slate-700 mb-2">Asistente IA</h3>
         <p className="text-sm text-slate-500">
-          Select a placeholder in the document to start generating content with AI.
+          Selecciona una sección interactiva en el documento para comenzar a editarla con DeepSeek.
         </p>
       </div>
     );
@@ -53,7 +84,7 @@ export default function ChatPanel({ activePlaceholder }: { activePlaceholder: st
       {/* Panel Header */}
       <div className="h-14 border-b flex items-center px-4 shrink-0 bg-slate-50/50">
         <div className="flex flex-col">
-          <span className="text-xs text-slate-500 font-medium uppercase tracking-wider">Editing Section</span>
+          <span className="text-xs text-slate-500 font-medium uppercase tracking-wider">Editando Sección</span>
           <span className="text-sm font-semibold text-indigo-700 font-mono tracking-tight">
             &lt;&lt;{activePlaceholder}&gt;&gt;
           </span>
@@ -64,9 +95,9 @@ export default function ChatPanel({ activePlaceholder }: { activePlaceholder: st
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {activeMessages.length === 0 ? (
           <div className="text-center p-4 bg-indigo-50/50 rounded-lg border border-indigo-100 mt-4">
-            <span className="text-xl mb-2 block">👋</span>
+            <span className="text-xl mb-2 block">🤖</span>
             <p className="text-sm text-indigo-900">
-              Describe what you need for this section and I'll write it for you.
+              Describe lo que necesitas para que la IA genere el contenido ideal en este espacio.
             </p>
           </div>
         ) : (
@@ -77,7 +108,7 @@ export default function ChatPanel({ activePlaceholder }: { activePlaceholder: st
               }`}>
                 {msg.role === 'user' ? <User size={16} /> : <Bot size={16} />}
               </div>
-              <div className={`p-3 rounded-2xl max-w-[85%] text-sm ${
+              <div className={`p-3 rounded-2xl max-w-[85%] text-sm whitespace-pre-wrap ${
                 msg.role === 'user' 
                   ? 'bg-slate-800 text-white rounded-tr-sm' 
                   : 'bg-white border text-slate-700 rounded-tl-sm shadow-sm'
@@ -113,7 +144,7 @@ export default function ChatPanel({ activePlaceholder }: { activePlaceholder: st
                 handleSend();
               }
             }}
-            placeholder="E.g. Write a professional introduction describing our digital marketing services..."
+            placeholder="Ej. Escribe una introducción formal destacando nuestros 10 años de experiencia..."
             className="w-full bg-transparent p-3 pr-12 max-h-32 min-h-[44px] text-sm resize-none focus:outline-none"
             rows={1}
           />
@@ -127,7 +158,7 @@ export default function ChatPanel({ activePlaceholder }: { activePlaceholder: st
         </div>
         <div className="mt-2 flex items-center gap-1.5 justify-center">
           <AlertCircle size={12} className="text-slate-400" />
-          <span className="text-xs text-slate-400">AI can make mistakes. Review generated content.</span>
+          <span className="text-xs text-slate-400">DeepSeek puede cometer errores. Revisa la info.</span>
         </div>
       </div>
     </div>
