@@ -6,9 +6,11 @@ type Message = { id: string; role: 'user' | 'assistant'; content: string };
 interface ChatPanelProps {
   documentId: string;
   activePlaceholder: string | null;
+  placeholderValues: Record<string, string>;
+  onAccept: (id: string, content: string) => void;
 }
 
-export default function ChatPanel({ documentId, activePlaceholder }: ChatPanelProps) {
+export default function ChatPanel({ documentId, activePlaceholder, placeholderValues, onAccept }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [loading, setLoading] = useState(false);
@@ -33,7 +35,8 @@ export default function ChatPanel({ documentId, activePlaceholder }: ChatPanelPr
         body: JSON.stringify({
           placeholder_id: activePlaceholder,
           user_message: userMsg.content,
-          chat_history: activeMessages.map(m => ({ role: m.role, content: m.content }))
+          chat_history: activeMessages.map(m => ({ role: m.role, content: m.content })),
+          document_context: placeholderValues
         })
       });
 
@@ -108,12 +111,24 @@ export default function ChatPanel({ documentId, activePlaceholder }: ChatPanelPr
               }`}>
                 {msg.role === 'user' ? <User size={16} /> : <Bot size={16} />}
               </div>
-              <div className={`p-3 rounded-2xl max-w-[85%] text-sm whitespace-pre-wrap ${
-                msg.role === 'user' 
-                  ? 'bg-slate-800 text-white rounded-tr-sm' 
-                  : 'bg-white border text-slate-700 rounded-tl-sm shadow-sm'
-              }`}>
-                {msg.content}
+              <div className="flex flex-col gap-1 max-w-[85%]">
+                <div className={`p-3 rounded-2xl text-sm whitespace-pre-wrap ${
+                  msg.role === 'user' 
+                    ? 'bg-slate-800 text-white rounded-tr-sm' 
+                    : 'bg-white border text-slate-700 rounded-tl-sm shadow-sm'
+                }`}>
+                  {msg.content}
+                </div>
+                {msg.role === 'assistant' && (
+                  <button 
+                    onClick={() => {
+                      if (activePlaceholder) onAccept(activePlaceholder, msg.content);
+                    }}
+                    className="self-end text-xs text-indigo-600 hover:text-indigo-800 font-medium px-2 py-1 bg-indigo-50 rounded"
+                  >
+                    Usar este texto
+                  </button>
+                )}
               </div>
             </div>
           ))

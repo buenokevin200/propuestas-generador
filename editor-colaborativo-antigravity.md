@@ -69,9 +69,10 @@ Ideal para profesionales que requieren personalizar rápidamente documentos sin 
 - **Almacenamiento de archivos:** S3 o equivalente (AWS S3, MinIO)
 
 ### IA
-- **Modelo principal:** Claude claude-sonnet-4-20250514 (Anthropic API)
-- **Modelo de fallback:** GPT-4o (OpenAI API)
-- **Orquestación de prompts:** LangChain o custom prompt builder
+### IA
+- **Modelo principal:** DeepSeek (deepseek-chat)
+- **Integración:** OpenAI SDK compatible
+- **Orquestación de prompts:** Custom prompt builder interno
 
 ---
 
@@ -396,7 +397,7 @@ Solicita la edición de un placeholder mediante IA.
   "placeholder_id": "descripcion_empresa",
   "generated_content": "Acompañamos a organizaciones en su proceso de transformación digital, diseñando estrategias que integran tecnología, procesos y talento humano para alcanzar resultados sostenibles.",
   "char_count": 198,
-  "model_used": "claude-sonnet-4-20250514",
+  "model_used": "deepseek-chat",
   "warnings": []
 }
 ```
@@ -581,15 +582,28 @@ And permite al usuario decidir si exportar de todas formas o completarlos primer
 | `python-docx` | ≥ 1.1.0 | Parseo y escritura de archivos DOCX |
 | `python-pptx` | ≥ 0.6.23 | Parseo y escritura de archivos PPTX |
 | `mammoth` (JS) | ≥ 1.6.0 | Renderizado de DOCX en el navegador |
-| `anthropic` (Python SDK) | ≥ 0.25.0 | Integración con Claude API |
-| `openai` (Python SDK) | ≥ 1.30.0 | Integración con GPT-4o (fallback) |
+| `openai` (Python SDK) | ≥ 1.30.0 | Integración con DeepSeek API (Compatible) |
 | `celery` | ≥ 5.3.0 | Cola de tareas asíncronas |
 | `redis` | ≥ 7.0 | Backend de Celery y caché |
 | `fastapi` | ≥ 0.111.0 | Framework de API REST |
 | `ClamAV` | ≥ 1.3 | Escaneo antivirus de archivos subidos |
 | `PostgreSQL` | ≥ 15 | Persistencia de sesiones y registros |
 
+## 15. Despliegue en Infraestructura (Coolify)
+
+El despliegue de la aplicación se ejecuta orquestadamente sobre Coolify v4 mediante `docker-compose.yml`, con proxy reverso interno Traefik. Se han adoptado las siguientes configuraciones críticas operativas:
+
+### 15.1 Limitaciones del Proxy (Nginx + Traefik)
+- **Archivos Grandes:** Nginx ha sido reconfigurado para permitir subidas pesadas (`client_max_body_size 50M;`), mitigando el bloqueo por defecto de plantillas Word/PPTX.
+- **Tiempos de Espera (Timeouts):** Dado que la generación de IA por DeepSeek puede tardar varios segundos, el `proxy_read_timeout` se expandió a 300 segundos, previniendo cierres de conexión prematuros.
+
+### 15.2 Troubleshooting Clásico en Coolify
+| Error | Causa | Solución Implementada |
+|---|---|---|
+| `host not found in upstream "colaborativo_backend"` | Nginx no logra resolver el alias de un contenedor que aún arranca. | Nginx debe apuntar específicamente al alias DNS del Docker Compose (`http://backend:8000`), el cual es inyectado desde el inicio. |
+| `Status 404 page not found` | Traefik oculta/ignora el contenedor o rechaza la URL. | 1. Eliminar puertos estrictos en la declaración del dominio en Coolify (prohibido usar sufijos `:80`). 2. Asegurarse que el contendor no reesté catalogado iterativamente como `unhealthy` por healthchecks defectuosos de Alpine (ej. fallos por carecer de IPV6 local en `wget`). |
+
 ---
 
-*Versión del documento: 1.0.0 — Última actualización: Abril 2025*
-*Estado: Ready for Antigravity Review*
+*Versión del documento: 1.1.0 — Última actualización: Abril 2026*
+*Estado: En Producción (Coolify)*

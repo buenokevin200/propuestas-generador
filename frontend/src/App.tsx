@@ -9,12 +9,19 @@ export type Placeholder = {
   constraints: Record<string, string>;
 };
 
+export type ChunkItem = { type: 'text', text: string } | { type: 'placeholder', id: string, raw: string };
+export type ParagraphChunk = ChunkItem[];
+
 export default function App() {
   const [documentLoaded, setDocumentLoaded] = useState(false);
   const [activePlaceholder, setActivePlaceholder] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [previewMode, setPreviewMode] = useState(false);
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [placeholders, setPlaceholders] = useState<Placeholder[]>([]);
+  const [chunks, setChunks] = useState<ParagraphChunk[]>([]);
+  const [placeholderValues, setPlaceholderValues] = useState<Record<string, string>>({});
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -39,12 +46,38 @@ export default function App() {
       const data = await response.json();
       setDocumentId(data.document_id);
       setPlaceholders(data.placeholders || []);
+      setChunks(data.chunks || []);
       setDocumentLoaded(true);
     } catch (error) {
       alert("Uh oh! Failed to upload document. Is the backend running?");
       console.error(error);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleExport = async () => {
+    if (!documentId) return;
+    setExporting(true);
+    try {
+      const res = await fetch(`/api/v1/documents/${documentId}/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ placeholder_values: placeholderValues })
+      });
+      if (!res.ok) throw new Error("Fallo exportando el documento");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Documento_Generado_${documentId}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Error al exportar");
+      console.error(err);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -61,10 +94,20 @@ export default function App() {
             <h1 className="font-semibold text-lg">AI Document Generator</h1>
           </div>
           <div className="flex gap-3">
-            <button className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-md transition-colors">
-              Preview
-            </button>
-            <button className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors shadow-sm">
+            {documentLoaded && (
+              <button 
+                onClick={() => setPreviewMode(!previewMode)}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${previewMode ? 'bg-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}
+              >
+                {previewMode ? 'Edit Mode' : 'Preview'}
+              </button>
+            )}
+            <button 
+              onClick={handleExport}
+              disabled={exporting || !documentLoaded}
+              className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors shadow-sm flex gap-2 items-center disabled:opacity-50"
+            >
+              {exporting && <Loader2 size={16} className="animate-spin" />}
               Export Word
             </button>
           </div>
@@ -104,19 +147,24 @@ export default function App() {
             </div>
           ) : (
             <DocumentViewer 
+              chunks={chunks}
               placeholders={placeholders}
+              placeholderValues={placeholderValues}
               activePlaceholder={activePlaceholder} 
               onSelect={setActivePlaceholder} 
+              previewMode={previewMode}
             />
           )}
         </main>
       </div>
 
       {/* Chat / AI Panel */}
-      {documentLoaded && documentId && (
+      {documentLoaded && documentId && !previewMode && (
         <ChatPanel 
           documentId={documentId}
           activePlaceholder={activePlaceholder} 
+          placeholderValues={placeholderValues}
+          onAccept={(id, content) => setPlaceholderValues(prev => ({ ...prev, [id]: content }))}
         />
       )}
     </div>

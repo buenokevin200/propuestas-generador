@@ -28,39 +28,46 @@ class EditRequest(BaseModel):
     placeholder_id: str
     user_message: str
     chat_history: Optional[List[Dict[str, str]]] = []
+    document_context: Optional[Dict[str, str]] = {}
 
-def extract_placeholders(docx_path: str):
+def extract_placeholders_and_chunks(docx_path: str):
     doc = docx.Document(docx_path)
-    placeholders = []
-    # Simplified regex for <<placeholder_name|max:500>>
     pattern = re.compile(r"<<([^>]+)>>")
-    
-    for para in doc.paragraphs:
-        matches = pattern.findall(para.text)
-        for match in matches:
-            parts = match.split('|')
-            name = parts[0].strip()
-            constraints = {}
-            for part in parts[1:]:
-                if ':' in part:
-                    k, v = part.split(':', 1)
-                    constraints[k.strip()] = v.strip()
-            placeholders.append({
-                "id": name,
-                "raw": f"<<{match}>>",
-                "constraints": constraints,
-                "current_value": None
-            })
-            
-    # Remove duplicates but preserve order
-    seen = set()
     unique_placeholders = []
-    for p in placeholders:
-        if p["id"] not in seen:
-            seen.add(p["id"])
-            unique_placeholders.append(p)
+    seen = set()
+    chunks = []
+
+    for para in doc.paragraphs:
+        if not para.text.strip():
+            continue
+        parts = re.split(r"(<<[^>]+>>)", para.text)
+        para_chunks = []
+        for part in parts:
+            if not part: continue
+            if part.startswith("<<") and part.endswith(">>"):
+                inner = part[2:-2]
+                inner_parts = inner.split('|')
+                name = inner_parts[0].strip()
+                constraints = {}
+                for c in inner_parts[1:]:
+                    if ':' in c:
+                        k, v = c.split(':', 1)
+                        constraints[k.strip()] = v.strip()
+                
+                if name not in seen:
+                    unique_placeholders.append({
+                        "id": name,
+                        "raw": part,
+                        "constraints": constraints,
+                        "current_value": None
+                    })
+                    seen.add(name)
+                para_chunks.append({"type": "placeholder", "id": name, "raw": part})
+            else:
+                para_chunks.append({"type": "text", "text": part})
+        chunks.append(para_chunks)
             
-    return unique_placeholders
+    return unique_placeholders, chunks
 
 @app.post("/api/v1/documents/upload")
 async def upload_document(file: UploadFile = File(...)):
@@ -76,9 +83,10 @@ async def upload_document(file: UploadFile = File(...)):
         f.write(content)
         
     placeholders = []
+    chunks = []
     if file.filename.endswith(".docx"):
         try:
-            placeholders = extract_placeholders(file_path)
+            placeholders, chunks = extract_placeholders_and_chunks(file_path)
         except Exception as e:
             print("Error parsing docx:", e)
 
@@ -87,6 +95,7 @@ async def upload_document(file: UploadFile = File(...)):
         "filename": file.filename,
         "format": file.filename.split('.')[-1],
         "placeholders": placeholders,
+        "chunks": chunks,
         "preview_url": f"/api/v1/documents/{file_id}/preview" # Not fully implemented visually yet
     }
 
@@ -94,9 +103,14 @@ async def upload_document(file: UploadFile = File(...)):
 async def edit_placeholder(document_id: str, request: EditRequest):
     try:
         # Prompting logic
-        messages = [
-            {"role": "system", "content": f"Eres un asistente redactor. Escribe el contenido para la sección: {request.placeholder_id}. Mantente directo y conciso al requerimiento."}
-        ]
+        system_content = f"Eres un asistente redactor. Escribe el contenido para la sección: {request.placeholder_id}. Mantente directo y conciso al requerimiento."
+        
+        if request.document_context:
+            context_str = "\n".join([f"- {k}: {v}" for k, v in request.document_context.items() if v])
+            if context_str:
+                system_content += f"\n\nContexto previo del documento ya acordado (úsalo para mantener coherencia narrativa si corresponde):\n{context_str}"
+
+        messages = [{"role": "system", "content": system_content}]
         
         # Add history if provided
         for msg in request.chat_history:
@@ -124,15 +138,47 @@ async def edit_placeholder(document_id: str, request: EditRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/v1/documents/{document_id}/status")
-async def document_status(document_id: str):
-    return {
-        "document_id": document_id,
-        "total_placeholders": 3,
-        "completed": 0,
-        "pending": [],
-        "last_edited_at": None
-    }
+from fastapi.responses import FileResponse
+
+class ExportRequest(BaseModel):
+    placeholder_values: Dict[str, str]
+
+@app.post("/api/v1/documents/{document_id}/export")
+async def export_document(document_id: str, request: ExportRequest):
+    files = [f for f in os.listdir("uploads") if f.startswith(f"{document_id}_")]
+    if not files:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    file_path = os.path.join("uploads", files[0])
+    doc = docx.Document(file_path)
+    pattern = re.compile(r"<<([^>]+)>>")
+
+    for para in doc.paragraphs:
+        matches = pattern.findall(para.text)
+        if matches:
+            new_text = para.text
+            for match in matches:
+                name = match.split('|')[0].strip()
+                val = request.placeholder_values.get(name) or f"<<{match}>>"
+                new_text = new_text.replace(f"<<{match}>>", val)
+            para.text = new_text
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    matches = pattern.findall(para.text)
+                    if matches:
+                        new_text = para.text
+                        for match in matches:
+                            name = match.split('|')[0].strip()
+                            val = request.placeholder_values.get(name) or f"<<{match}>>"
+                            new_text = new_text.replace(f"<<{match}>>", val)
+                        para.text = new_text
+                        
+    out_path = f"uploads/{document_id}_export.docx"
+    doc.save(out_path)
+    return FileResponse(out_path, filename=f"export_{files[0].split('_', 1)[1]}", media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 if __name__ == "__main__":
     import uvicorn
