@@ -1,7 +1,6 @@
-import { Placeholder, ParagraphChunk } from '../App';
+import type { ParagraphChunk } from '../App';
 
 interface DocumentViewerProps {
-  placeholders: Placeholder[];
   chunks?: ParagraphChunk[];
   placeholderValues: Record<string, string>;
   activePlaceholder: string | null;
@@ -9,7 +8,7 @@ interface DocumentViewerProps {
   previewMode: boolean;
 }
 
-export default function DocumentViewer({ placeholders, chunks, placeholderValues, activePlaceholder, onSelect, previewMode }: DocumentViewerProps) {
+export default function DocumentViewer({ chunks, placeholderValues, activePlaceholder, onSelect, previewMode }: DocumentViewerProps) {
   return (
     <div className="w-full max-w-[850px] bg-white shadow-md border rounded-sm mx-auto my-4 p-16 font-serif text-slate-800 leading-relaxed min-h-[1100px]">
       <div className="max-w-[700px] mx-auto">

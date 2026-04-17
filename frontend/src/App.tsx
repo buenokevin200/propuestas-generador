@@ -19,7 +19,6 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
   const [documentId, setDocumentId] = useState<string | null>(null);
-  const [placeholders, setPlaceholders] = useState<Placeholder[]>([]);
   const [chunks, setChunks] = useState<ParagraphChunk[]>([]);
   const [placeholderValues, setPlaceholderValues] = useState<Record<string, string>>({});
   
@@ -45,7 +44,6 @@ export default function App() {
 
       const data = await response.json();
       setDocumentId(data.document_id);
-      setPlaceholders(data.placeholders || []);
       setChunks(data.chunks || []);
       setDocumentLoaded(true);
     } catch (error) {
@@ -148,7 +146,6 @@ export default function App() {
           ) : (
             <DocumentViewer 
               chunks={chunks}
-              placeholders={placeholders}
               placeholderValues={placeholderValues}
               activePlaceholder={activePlaceholder} 
               onSelect={setActivePlaceholder} 
