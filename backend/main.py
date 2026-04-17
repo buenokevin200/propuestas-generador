@@ -8,8 +8,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 import docx
-from docxtpl import DocxTemplate
+from docxtpl import DocxTemplate, RichText
 import jinja2
+import markdown
+from bs4 import BeautifulSoup
 
 app = FastAPI(title="AI Document Constructor API")
 
@@ -36,27 +38,65 @@ class EditRequest(BaseModel):
 class ExportRequest(BaseModel):
     placeholder_values: Dict[str, str]
 
+def _process_inline(tag, paragraph):
+    """Helper to handle basic formatting inside a paragraph."""
+    for child in tag.children:
+        if hasattr(child, 'name') and child.name:
+            if child.name in ['strong', 'b']:
+                paragraph.add_run(child.get_text()).bold = True
+            elif child.name in ['em', 'i']:
+                paragraph.add_run(child.get_text()).italic = True
+            else:
+                paragraph.add_run(child.get_text())
+        else:
+            paragraph.add_run(str(child))
+
+def render_markdown_to_subdoc(md_text, doc):
+    """Parses markdown and converts it to Word elements in a SubDoc."""
+    sd = doc.new_subdoc()
+    # Enable tables extension
+    html = markdown.markdown(md_text, extensions=['tables'])
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    for tag in soup.find_all(recursive=False):
+        if tag.name == 'p':
+            _process_inline(tag, sd.add_paragraph())
+        elif tag.name == 'table':
+            rows = tag.find_all('tr')
+            if not rows: continue
+            
+            cols_count = len(rows[0].find_all(['td', 'th']))
+            table = sd.add_table(rows=0, cols=cols_count)
+            table.style = 'Table Grid'
+            
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                row_cells = table.add_row().cells
+                for i, cell in enumerate(cells):
+                    _process_inline(cell, row_cells[i].paragraphs[0])
+        elif tag.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+            sd.add_heading(tag.get_text(), level=int(tag.name[1]))
+        elif tag.name in ['ul', 'ol']:
+            for li in tag.find_all('li'):
+                p = sd.add_paragraph(style='List Bullet' if tag.name == 'ul' else 'List Number')
+                _process_inline(li, p)
+                
+    return sd
+
 def extract_placeholders_list(docx_path: str):
-    """Simple extraction of placeholders using <<name>> syntax."""
     doc = docx.Document(docx_path)
     pattern = re.compile(r"<<([^>]+)>>")
     placeholders = []
     seen = set()
 
-    # Search in paragraphs
     for para in doc.paragraphs:
         matches = pattern.findall(para.text)
         for match in matches:
             name = match.split('|')[0].strip()
             if name not in seen:
-                placeholders.append({
-                    "id": name,
-                    "raw": f"<<{match}>>",
-                    "constraints": _parse_constraints(match)
-                })
+                placeholders.append({"id": name, "raw": f"<<{match}>>", "constraints": _parse_constraints(match)})
                 seen.add(name)
     
-    # Search in tables
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -65,11 +105,7 @@ def extract_placeholders_list(docx_path: str):
                     for match in matches:
                         name = match.split('|')[0].strip()
                         if name not in seen:
-                            placeholders.append({
-                                "id": name,
-                                "raw": f"<<{match}>>",
-                                "constraints": _parse_constraints(match)
-                            })
+                            placeholders.append({"id": name, "raw": f"<<{match}>>", "constraints": _parse_constraints(match)})
                             seen.add(name)
     return placeholders
 
@@ -85,15 +121,14 @@ def _parse_constraints(match_str: str) -> Dict[str, str]:
 @app.post("/api/v1/documents/upload")
 async def upload_document(file: UploadFile = File(...)):
     if not file.filename.endswith(".docx"):
-        raise HTTPException(status_code=400, detail="En esta versión, solo se aceptan archivos .docx para garantizar formato.")
+        raise HTTPException(status_code=400, detail="Solo se aceptan archivos .docx.")
     
     file_id = f"doc_{uuid.uuid4().hex[:8]}"
     os.makedirs("uploads", exist_ok=True)
     file_path = f"uploads/{file_id}_{file.filename}"
     
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+    with open(file_path, "wb") as f: f.write(content)
         
     try:
         placeholders = extract_placeholders_list(file_path)
@@ -101,21 +136,21 @@ async def upload_document(file: UploadFile = File(...)):
         print(f"Error parsing: {e}")
         placeholders = []
 
-    return {
-        "document_id": file_id,
-        "filename": file.filename,
-        "placeholders": placeholders
-    }
+    return {"document_id": file_id, "filename": file.filename, "placeholders": placeholders}
 
 @app.post("/api/v1/documents/{document_id}/edit")
 async def edit_placeholder(document_id: str, request: EditRequest):
     try:
-        system_content = f"Eres un asistente redactor profesional. Tu tarea es generar el contenido para la sección: {request.placeholder_id}."
+        system_content = (
+            f"Eres un asistente redactor profesional. Genera el contenido para la sección: {request.placeholder_id}. "
+            "IMPORTANTE: Puedes usar Markdown (negritas, cursivas, listas) y si se requiere una tabla, "
+            "genérala en formato Markdown (| col | col |). El sistema la convertirá a una tabla de Word real."
+        )
         
         if request.document_context:
             context_str = "\n".join([f"- {k}: {v}" for k, v in request.document_context.items() if v])
             if context_str:
-                system_content += f"\n\nContexto global de la propuesta:\n{context_str}"
+                system_content += f"\n\nContexto global:\n{context_str}"
 
         messages = [{"role": "system", "content": system_content}]
         for msg in request.chat_history:
@@ -125,7 +160,7 @@ async def edit_placeholder(document_id: str, request: EditRequest):
         response = await client.chat.completions.create(
             model="deepseek-chat",
             messages=messages,
-            max_tokens=1000,
+            max_tokens=1500,
             temperature=0.7
         )
         
@@ -144,23 +179,34 @@ async def export_document(document_id: str, request: ExportRequest):
     tpl_path = os.path.join("uploads", files[0])
     doc = DocxTemplate(tpl_path)
     
-    # Configure Jinja to use << >> instead of {{ }} to match user syntax
-    jinja_env = jinja2.Environment(
-        variable_start_string='<<', 
-        variable_end_string='>>'
-    )
+    # Pre-process tags 
+    doc_for_tags = docx.Document(tpl_path)
+    pattern = re.compile(r"<<([^>]+)>>")
+    full_context = {}
     
-    # Render with values, preserving all formatting
-    doc.render(request.placeholder_values, jinja_env)
+    def _collect_tags(paragraphs):
+        for para in paragraphs:
+            matches = pattern.findall(para.text)
+            for m in matches:
+                tag_id = m.split('|')[0].strip()
+                if tag_id in request.placeholder_values:
+                    content = request.placeholder_values[tag_id]
+                    # Convert content to SubDoc to handle Rich Text and Tables
+                    full_context[m] = render_markdown_to_subdoc(content, doc)
+
+    _collect_tags(doc_for_tags.paragraphs)
+    for table in doc_for_tags.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                _collect_tags(cell.paragraphs)
+
+    jinja_env = jinja2.Environment(variable_start_string='<<', variable_end_string='>>')
+    doc.render(full_context, jinja_env)
     
     out_path = f"uploads/{document_id}_final.docx"
     doc.save(out_path)
     
-    return FileResponse(
-        out_path, 
-        filename=f"Propuesta_Final_{files[0].split('_', 1)[1]}",
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    return FileResponse(out_path, filename=f"Propuesta_AI_{files[0].split('_', 1)[1]}", media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 if __name__ == "__main__":
     import uvicorn
