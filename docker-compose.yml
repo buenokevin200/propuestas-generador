@@ -24,9 +24,4 @@ services:
     container_name: colaborativo_frontend
     depends_on:
       - backend
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ > /dev/null || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
     restart: unless-stopped
